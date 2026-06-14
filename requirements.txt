@@ -1,0 +1,16 @@
+# Hugging Face Hub (cache-native model fetching)
+huggingface_hub>=1.18.0
+
+# Diffusers (FLUX pipeline, scheduler, VAE, transformer)
+diffusers>=0.33.0
+
+# PEFT (LoRA adapter management)
+peft>=0.14.0
+
+# Transformers (tokenizers + text encoders)
+transformers>=4.48.0
+
+# Depth colorization
+matplotlib>=3.8.0
+# OpenCV (image resize helpers)
+opencv-python-headless>=4.8.0
