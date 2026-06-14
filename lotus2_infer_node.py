@@ -112,6 +112,36 @@ def _get_pipeline(pretrained_model_path: str, task_name: str):
     return _PIPELINES[cache_key]
 
 
+def _apply_colormap(depth_2d: np.ndarray, color_map_name: str) -> tuple[Image.Image, torch.Tensor]:
+    """Colorize depth map and return vis PIL image + grayscale depth tensor.
+
+    Returns (vis_pil_image, depth_tensor_normalized_to_01).
+    depth_tensor shape is [H, W] float32 in range [0, 1].
+    """
+    # Normalize raw depth to [0, 1]
+    min_val = depth_2d.min()
+    max_val = depth_2d.max()
+
+    if max_val - min_val > 1e-6:
+        normalized = ((depth_2d - min_val) / (max_val - min_val)).astype(np.float32)
+    else:
+        normalized = np.zeros_like(depth_2d, dtype=np.float32)
+
+    # Grayscale depth tensor [H, W] for DEPTHS return type
+    depth_tensor = torch.from_numpy(normalized)[None, ...].to(torch.float32)  # shape [1,H,W]
+
+    if color_map_name == "grayscale":
+        vis_pil = Image.fromarray((normalized * 255).astype(np.uint8))
+    else:
+        import matplotlib.colormaps as mcolors
+
+        cm = mcolors[color_map_name]
+        rgba = cm(normalized, bytes=False)[:, :, :3]  # drop alpha → RGB float [0-1]
+        vis_pil = Image.fromarray((rgba * 255).astype(np.uint8))
+
+    return vis_pil, depth_tensor
+
+
 class Lotus2Infer:
     """ComfyUI node that wraps Lotus-2 inference pipeline for depth/normal estimation."""
 
@@ -134,10 +164,12 @@ class Lotus2Infer:
                         "step": 1,
                     },
                 ),
+                "color_map": (["grayscale", "viridis", "plasma", "inferno", "magma", "cividis", "Spectral"], {"default": "grayscale"}),
             }
         }
 
-    RETURN_TYPES = ("IMAGE",)
+    RETURN_TYPES = ("IMAGE", "DEPTHS")
+    RETURN_NAMES = ("image_output", "depth_map")
     FUNCTION = "process"
     CATEGORY = "image/depth_normal_estimation"
 
@@ -146,7 +178,8 @@ class Lotus2Infer:
         image, 
         pretrained_model_name_or_path, 
         task_name, 
-        num_inference_steps
+        num_inference_steps,
+        color_map="grayscale"
     ):
         """Run Lotus-2 inference on input image via temp file I/O."""
         
@@ -171,10 +204,9 @@ class Lotus2Infer:
         try:
             pil_image.save(tmp_file)
 
-            # Import and run inference (uses infer.py's own pipeline path).
             from infer import process_single_image
 
-            _, output_vis_pil, _ = process_single_image(
+            _, output_vis_pil, raw_output_npy = process_single_image(
                 tmp_file,
                 pipeline,
                 task_name=task_name,
@@ -182,16 +214,38 @@ class Lotus2Infer:
                 num_inference_steps=num_inference_steps,
             )
 
-            # Convert the visualization image → ComfyUI tensor [1, H, W, C] float32 [0–1].
-            vis = output_vis_pil if isinstance(output_vis_pil, Image.Image) else Image.fromarray(np.asarray(output_vis_pil))
-            result_tensor = torch.from_numpy(np.array(vis.convert("RGB")).astype(np.float32) / 255.0)[None, ...]
+            if task_name == "depth":
+                # raw_output_npy is [H,W] single-channel depth — colorize & normalize.
+                vis_pil, depth_tensor = _apply_colormap(raw_output_npy, color_map)
+                
+                # Convert vis PIL → ComfyUI IMAGE tensor [1,H,W,C] float32 in [0-1].
+                result_vis = torch.from_numpy(
+                    np.array(vis_pil.convert("RGB")).astype(np.float32) / 255.0
+                )[None, ...]
+
+            elif task_name == "normal":
+                # raw_output_npy is already [H,W,C] RGB — normalize to [0,1].
+                if raw_output_npy.min() < 0 or raw_output_npy.max() > 1.01:
+                    normalized = ((raw_output_npy - raw_output_npy.min()) / 
+                                  (raw_output_npy.max() - raw_output_npy.min())).astype(np.float32)
+                else:
+                    normalized = raw_output_npy.astype(np.float32).clip(0, 1)
+
+                result_vis = torch.from_numpy(normalized)[None, ...]
+                
+                # DEPTHS for normal: just mean of channels as grayscale fallback.
+                depth_tensor = torch.from_numpy(
+                    np.mean(raw_output_npy, axis=-1, keepdims=True).astype(np.float32) / 255.0
+                )[None, ...].to(torch.float32)
+
+            else:
+                raise ValueError(f"Invalid task_name: {task_name}")
 
         finally:
-            # Clean up temp file
             if os.path.exists(tmp_file):
                 try:
                     os.remove(tmp_file)
                 except OSError as e:
                     logger.warning(f"Failed to cleanup {tmp_file}: {e}")
 
-        return (result_tensor,)
+        return (result_vis, depth_tensor)
