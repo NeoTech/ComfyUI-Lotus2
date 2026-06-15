@@ -174,15 +174,15 @@ class Lotus2Infer:
     CATEGORY = "image/depth_normal_estimation"
 
     def process(
-        self, 
-        image, 
-        pretrained_model_name_or_path, 
-        task_name, 
+        self,
+        image,
+        pretrained_model_name_or_path,
+        task_name,
         num_inference_steps,
-        color_map="grayscale"
+        color_map="grayscale",
     ):
         """Run Lotus-2 inference on input image via temp file I/O."""
-        
+
         # Get cached pipeline (downloads + loads models on first call)
         pipeline, device = _get_pipeline(pretrained_model_name_or_path, task_name)
 

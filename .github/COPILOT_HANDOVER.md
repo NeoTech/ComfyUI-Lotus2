@@ -59,7 +59,9 @@ ModelPatcher.__dict__["model"]  # DiffusionModel wrapper (has apply_model, encod
 |------|--------|-------|
 | `lotus2_inference.py` | CLEAN ✓ (367 lines) | _get_raw_flux fixed to diffusion_model, _flux_forward complete rewrite using process_img/block/pe_embedder/final_layer pattern from ComfyUI source |
 | `lotus2_loader.py` | CLEAN ✓ | LoadLotus2Adapters, LocalContinuityModule working |  
-| `__init__.py` | CLEAN ✓ | Node registration correct |
+| `__init__.py` | CLEAN ✓ | Node registration correct (3 nodes: Lotus-2 Infer + 2 depth_tools) |
+| `depth_tools.py` | NEW ✓ (104 lines) | DepthToAlphaMask + DepthBlendComposite — both accept DEPTHS type directly |
+| `tests/test_depth_tools.py` | NEW ✓ | 8 unit tests, all passing with [B,H,W] mock data |
 
 ## _flux_forward() Implementation Details (Current)
 - Calls Flux.process_img(x_spatial) internally — handles spatial→sequence packing + img_ids generation identically to ComfyUI's path.
