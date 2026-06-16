@@ -6,7 +6,7 @@ Registers Lotus-2 nodes with ComfyUI's custom-node system:
 """
 
 from .lotus2_infer_node import Lotus2Infer
-from .lotus2_peft_loader import Lotus2PeftLoader
+from .lotus2_peft_loader import Lotus2PeftLoader, Lotus2ModelCleanup
 from .lotus2_lcm_inference import Lotus2LcmInference
 from .lotus2_adapter_switcher import Lotus2AdapterSwitcher
 from .lotus2_latent_packer import Lotus2LatentPacker
@@ -20,7 +20,8 @@ NODE_CLASS_MAPPINGS = {
     "Lotus2AdapterSwitcher": Lotus2AdapterSwitcher,
     "Lotus-2 Latent Packer": Lotus2LatentPacker,
     "Lotus-2 Raw Transformer Forward": Lotus2RawTransformerForward,
-    "Lotus-2 Packed Sampler": Lotus2PackedSampler
+    "Lotus-2 Packed Sampler": Lotus2PackedSampler,
+    "Lotus-2 Cleanup Cache": Lotus2ModelCleanup
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -30,7 +31,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Lotus2AdapterSwitcher": "Lotus2: Switch Lotus Adapter",
     "Lotus-2 Latent Packer": "Lotus2: Pack/Unpack Flux Latents",
     "Lotus-2 Raw Transformer Forward": "Lotus2: Raw Transformer Forward",
-    "Lotus-2 Packed Sampler": "Lotus2: Packed Latent Denoiser"
+    "Lotus-2 Packed Sampler": "Lotus2: Packed Latent Denoiser",
+    "Lotus-2 Cleanup Cache": "Lotus2: Release Model Memory"
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

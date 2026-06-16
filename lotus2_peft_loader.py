@@ -41,6 +41,8 @@ class Lotus2ModelState:
     scheduler = None        # FlowMatchEulerDiscreteScheduler
     device: torch.device | str = ""
 
+    _ref_count: int = 0     # Active workflow references to this cached model
+
 
 # ============================================================
 # Private helpers
@@ -167,6 +169,8 @@ class Lotus2PeftLoader:
     def load(self, pretrained_model_name_or_path: str, task_name: str):
         """Load or return cached Lotus-2 PEFT model state.
 
+        Increments ref_count on cache hit so cleanup knows when all users are done.
+
         Returns:
             Tuple containing a single Lotus2ModelState instance.
         """
@@ -174,8 +178,109 @@ class Lotus2PeftLoader:
 
         if cache_key in self._CACHE:
             logger.info("Reusing cached model state [%s].", cache_key)
+            self._CACHE[cache_key]._ref_count += 1
             return (self._CACHE[cache_key],)
 
         state = _get_or_create_model_state(pretrained_model_name_or_path, task_name)
+        state._ref_count = 1
         self._CACHE[cache_key] = state
+        logger.info("New model state cached [%s].", cache_key)
         return (state,)
+
+
+def _cleanup_model_state(
+    pretrained_model_name_or_path: str | None = None,
+    task_name: str | None = None,
+):
+    """Decrement ref count for a cached model; unload if zero.
+
+    Each call decrements the matched entry's _ref_count by 1. When it reaches 
+    0 the transformer + LCM are moved to CPU and removed from cache.
+
+    Args:
+        pretrained_model_name_or_path: If None, sweep ALL entries (decrement every ref).
+                                        Otherwise match specific path+task combo.
+        task_name: Task name ("depth"/"normal"). Ignored when pretrained is None.
+    """
+    keys_to_remove = []
+
+    for cache_key, state in Lotus2PeftLoader._CACHE.items():
+        # If filtering by key, skip non-matching entries
+        if pretrained_model_name_or_path is not None and task_name is not None:
+            if cache_key != (pretrained_model_name_or_path, task_name):
+                continue
+
+        # Decrement ref count — each cleanup call reduces by 1
+        state._ref_count -= 1
+        logger.info("Ref count for [%s] decremented to %d", cache_key, state._ref_count)
+
+        if state._ref_count <= 0:
+            keys_to_remove.append(cache_key)
+            logger.info("Unloading model state [%s] — ref count reached 0.", cache_key)
+
+            # Move to CPU first, then delete references
+            if state.transformer is not None:
+                try:
+                    state.transformer.to(device="cpu")
+                except Exception as e:
+                    logger.warning("Error moving transformer to CPU during cleanup: %s", e)
+                delattr(state, "transformer")
+
+            if hasattr(state, "lcm_module") and state.lcm_module is not None:
+                try:
+                    state.lcm_module.to(device="cpu")
+                except Exception as e:
+                    logger.warning("Error moving LCM to CPU during cleanup: %s", e)
+                delattr(state, "lcm_module")
+
+    # Remove all zero-ref entries from cache AFTER processing (avoid dict mutation while iterating)
+    for key in keys_to_remove:
+        Lotus2PeftLoader._CACHE.pop(key, None)
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+# ============================================================
+# Cleanup node — explicit VRAM release
+# ============================================================
+
+class Lotus2ModelCleanup:
+    """Explicitly decrement ref count and unload cached models from VRAM.
+
+    Place this at the end of a workflow branch or before loading new tasks to 
+    free up GPU memory when no longer needed.
+    
+    When pretrained_model_name_or_path is 'ALL', releases all 0-ref entries across every task."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "pretrained_model_name_or_path": (
+                    ["ALL", "black-forest-labs/FLUX.1-dev"],
+                    {"default": "black-forest-labs/FLUX.1-dev"},
+                ),
+                "task_name": ("depth,normal".split(","),),
+            },
+            "optional": {
+                "trigger": (
+                    "*",
+                    {"tooltip": "Wire from LOTUS_MODEL output to run cleanup AFTER inference."},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "cleanup"
+    CATEGORY = "image/lotus2_decomposed"
+    OUTPUT_NODE = True  # Signal this is a terminal cleanup node
+
+    def cleanup(self, pretrained_model_name_or_path: str, task_name: str, trigger=None):
+        """Decrement ref count and unload if all users are done."""
+        path = None if pretrained_model_name_or_path == "ALL" else pretrained_model_name_or_path
+        tsk = task_name if path is not None else None
+
+        _cleanup_model_state(pretrained_model_name_or_path=path, task_name=tsk)
+
+        return ()

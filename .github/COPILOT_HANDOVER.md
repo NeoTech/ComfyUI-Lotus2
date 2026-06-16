@@ -1,7 +1,18 @@
 # ComfyUI-Lotus2 Development Handover
 
-**Last Updated:** 2026-06-16  
+**Last Updated:** 2026-06-16 (cache management + explicit cleanup node)
 **Status:** 95% code-complete; awaiting demo workflow + integration testing
+---
+## Recent Changes
+
+### PEFT Loader Cache Management (2026-06-16)
+Added reference-counted caching to `lotus2_peft_loader.py`:
+- **Lotus2ModelState** now tracks `_ref_count` per cached entry
+- **load()** increments ref count on cache hit, sets 1 on new creation
+- **_cleanup_model_state()** helper decrements by 1; unloads to CPU + clears from cache when hits 0
+- **New Lotus2ModelCleanup node**: Users can add "Lotus2: Release Model Memory" to workflow to explicitly free VRAM
+    
+**IMPORTANT CONSTRAINT:** ComfyUI has no `on_node_disconnect` hook for custom nodes. The ref count must be manually decremented by calling the cleanup node — it will NOT auto-unload when you disconnect loader outputs in the UI.
 
 ---
 
@@ -82,6 +93,7 @@ Load-PEFT → [VAE Encode] → Pack → [Switch→core] → [Raw-Forward] → [U
 - **No error validation:** Limited type checking at node boundaries
 - **Device placement:** All parameters must be on same device; LCM requires explicit `.to(device)` handling
 - **Timestep bounds:** Raw-Forward accepts [0.001, 1.0]; edge cases at t=0 untested
+- **Cache cleanup is manual:** Users MUST add "Lotus2: Release Model Memory" node to free VRAM after use. Disconnecting loader outputs does NOT trigger auto-unload.
 
 ---
 
