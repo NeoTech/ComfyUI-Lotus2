@@ -1,0 +1,248 @@
+{
+  "1": {
+    "inputs": {
+      "pretrained_model_name_or_path": "black-forest-labs/FLUX.1-dev",
+      "task_name": "depth"
+    },
+    "class_type": "Load-Lotus2-PEFT",
+    "_meta": {
+      "title": "Load Lotus-2 PEFT Adapters"
+    }
+  },
+  "2": {
+    "inputs": {
+      "image": "image.png",
+      "crop_size": 0
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "3": {
+    "inputs": {
+      "ckpt_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "4": {
+    "inputs": {
+      "pixels": [
+        "2",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "5": {
+    "inputs": {
+      "clip": "black-forest-labs/FLUX.1-dev",
+      "type": "t5xxl"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "CLIP Loader (T5-XXL for FLUX)"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Empty Prompt)"
+    }
+  },
+  "7": {
+    "inputs": {
+      "latents": [
+        "4",
+        0
+      ],
+      "mode": "pack"
+    },
+    "class_type": "Lotus-2 Latent Packer",
+    "_meta": {
+      "title": "Pack Latents (STAGE 1 Prep)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "lotus_model": [
+        "1",
+        0
+      ],
+      "adapter_name": "core_predictor"
+    },
+    "class_type": "Lotus2AdapterSwitcher",
+    "_meta": {
+      "title": "Switch to Core Predictor"
+    }
+  },
+  "9": {
+    "inputs": {
+      "lotus_model": [
+        "8",
+        0
+      ],
+      "packed_latents": [
+        "7",
+        0
+      ],
+      "timestep": 0.001,
+      "guidance_scale": 3.5,
+      "prompt_embeds": [
+        "6",
+        0
+      ],
+      "pooled_embeds": "",
+      "img_ids": [
+        "7",
+        1
+      ]
+    },
+    "class_type": "Lotus-2 Raw Transformer Forward",
+    "_meta": {
+      "title": "Raw Transformer Forward (Core Predictor)"
+    }
+  },
+  "10": {
+    "inputs": {
+      "latents": [
+        "9",
+        0
+      ],
+      "mode": "unpack"
+    },
+    "class_type": "Lotus-2 Latent Packer",
+    "_meta": {
+      "title": "Unpack Latents (After Core)"
+    }
+  },
+  "11": {
+    "inputs": {
+      "lotus_model": [
+        "1",
+        0
+      ],
+      "latents": [
+        "10",
+        0
+      ],
+      "device_override": ""
+    },
+    "class_type": "Lotus-2 LCM Inference",
+    "_meta": {
+      "title": "LCM Inference (Spatial Smoothing)"
+    }
+  },
+  "12": {
+    "inputs": {
+      "latents": [
+        "11",
+        0
+      ],
+      "mode": "pack"
+    },
+    "class_type": "Lotus-2 Latent Packer",
+    "_meta": {
+      "title": "Re-pack for Detail Sharpener"
+    }
+  },
+  "13": {
+    "inputs": {
+      "lotus_model": [
+        "1",
+        0
+      ],
+      "adapter_name": "detail_sharpener"
+    },
+    "class_type": "Lotus2AdapterSwitcher",
+    "_meta": {
+      "title": "Switch to Detail Sharpener"
+    }
+  },
+  "14": {
+    "inputs": {
+      "lotus_model": [
+        "13",
+        0
+      ],
+      "packed_latents": [
+        "12",
+        0
+      ],
+      "num_steps": 10,
+      "guidance_scale": 3.5,
+      "prompt_embeds": [
+        "6",
+        0
+      ],
+      "pooled_embeds": "",
+      "img_ids": [
+        "12",
+        1
+      ]
+    },
+    "class_type": "Lotus-2 Packed Sampler",
+    "_meta": {
+      "title": "Packed Sampler (Detail Sharpening Loop)"
+    }
+  },
+  "15": {
+    "inputs": {
+      "latents": [
+        "14",
+        0
+      ],
+      "mode": "unpack"
+    },
+    "class_type": "Lotus-2 Latent Packer",
+    "_meta": {
+      "title": "Final Unpack (After Sampler)"
+    }
+  },
+  "16": {
+    "inputs": {
+      "samples": [
+        "15",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode (Final Output)"
+    }
+  },
+  "17": {
+    "inputs": {
+      "images": [
+        "16",
+        0
+      ],
+      "filename_prefix": "lotus2_depth"
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Depth Map"
+    }
+  }
+}
