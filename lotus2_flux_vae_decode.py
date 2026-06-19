@@ -58,8 +58,8 @@ class Lotus2FluxVaeDecode:
         scaling_factor = self._get_vae_scaling_factor(vae)
         shift_factor = self._get_vae_shift_factor(vae)
 
-        decoded_latents = (latents / scaling_factor) + shift_factor
-        images = vae.decode(decoded_latents)
+        decoded_latents = (latents.detach() / scaling_factor) + shift_factor
+        images = vae.decode(decoded_latents.cpu())
 
         logger.info(
             "Lotus2FluxVaeDecode — samples=%s, scaling=%.4f, shift=%.4f",

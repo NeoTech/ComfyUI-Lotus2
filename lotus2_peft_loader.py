@@ -187,6 +187,11 @@ class Lotus2PeftLoader:
         logger.info("New model state cached [%s].", cache_key)
         return (state,)
 
+    @classmethod
+    def clear_cache(cls):
+        """Clear all cached Lotus-2 model states and release CUDA activation cache."""
+        _cleanup_model_state(pretrained_model_name_or_path="ALL")
+
 
 def _cleanup_model_state(
     pretrained_model_name_or_path: str | None = None,
@@ -218,20 +223,30 @@ def _cleanup_model_state(
             keys_to_remove.append(cache_key)
             logger.info("Unloading model state [%s] — ref count reached 0.", cache_key)
 
-            # Move to CPU first, then delete references
-            if state.transformer is not None:
+            # Move to CPU first, then delete references. Use getattr so cleanup can run on partially-cleared states.
+            transformer = getattr(state, "transformer", None)
+            if transformer is not None:
                 try:
-                    state.transformer.to(device="cpu")
+                    transformer.to(device="cpu")
                 except Exception as e:
                     logger.warning("Error moving transformer to CPU during cleanup: %s", e)
                 delattr(state, "transformer")
 
-            if hasattr(state, "lcm_module") and state.lcm_module is not None:
+            lcm_module = getattr(state, "lcm_module", None)
+            if lcm_module is not None:
                 try:
-                    state.lcm_module.to(device="cpu")
+                    lcm_module.to(device="cpu")
                 except Exception as e:
                     logger.warning("Error moving LCM to CPU during cleanup: %s", e)
                 delattr(state, "lcm_module")
+
+            scheduler = getattr(state, "scheduler", None)
+            if scheduler is not None:
+                try:
+                    scheduler.to(device="cpu")
+                except Exception as e:
+                    logger.warning("Error moving scheduler to CPU during cleanup: %s", e)
+                delattr(state, "scheduler")
 
     # Remove all zero-ref entries from cache AFTER processing (avoid dict mutation while iterating)
     for key in keys_to_remove:
