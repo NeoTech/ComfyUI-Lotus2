@@ -54,19 +54,16 @@ class Lotus2FluxVaeDecode:
                 f"(got {type(samples)} with keys {list(samples.keys()) if isinstance(samples, dict) else 'N/A'})"
             )
 
+        logger.info("Lotus2: VAE Decode reusing cache")
         latents = samples["samples"]
         scaling_factor = self._get_vae_scaling_factor(vae)
         shift_factor = self._get_vae_shift_factor(vae)
 
-        decoded_latents = (latents.detach() / scaling_factor) + shift_factor
-        images = vae.decode(decoded_latents.cpu())
-
-        logger.info(
-            "Lotus2FluxVaeDecode — samples=%s, scaling=%.4f, shift=%.4f",
-            tuple(latents.shape),
-            scaling_factor,
-            shift_factor,
-        )
+        decoded_latents = (latents / scaling_factor) + shift_factor
+        logger.info("Lotus2: VAE Decode loading model")
+        decoded_latents = decoded_latents.clone().detach()
+        decoded_latents = decoded_latents.to(device=latents.device, dtype=latents.dtype)
+        images = vae.decode(decoded_latents)
 
         return (images,)
 

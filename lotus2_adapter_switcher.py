@@ -67,6 +67,140 @@ class Lotus2AdapterSwitcher:
         """Delegate to the module-level helper (keeps class interface tidy)."""
         return _get_available_adapters(transformer)
 
+    @staticmethod
+    def _force_active_adapter(transformer, adapter_name):
+        """Force PEFT active adapter state for transformer and nested LoRA modules."""
+        if not hasattr(transformer, "peft_config") or transformer.peft_config is None:
+            raise RuntimeError(
+                "No PEFT adapters found on the transformer — did you skip Lotus2PeftLoader? "
+                "`transformer.peft_config` is missing."
+            )
+
+        available = set(transformer.peft_config.keys())
+        if adapter_name not in available:
+            raise RuntimeError(
+                f"Adapter '{adapter_name}' is not loaded on the transformer. "
+                f"Available adapters: {sorted(available)}."
+            )
+
+        # Ask PEFT to switch first.
+        try:
+            transformer.set_adapter(adapter_name)
+        except Exception as e:
+            logger.warning(
+                "PEFT set_adapter(%s) failed (%s); continuing with forced active state.",
+                adapter_name,
+                e,
+            )
+
+        # Force top-level PEFT bookkeeping.
+        if hasattr(transformer, "_active_adapter"):
+            try:
+                transformer._active_adapter = adapter_name
+            except Exception as e:
+                logger.warning(
+                    "Could not force transformer._active_adapter=%s (%s).",
+                    adapter_name,
+                    e,
+                )
+
+        # Also clear any stale active state that PEFT may have restored.
+        if hasattr(transformer, "_active_adapters"):
+            try:
+                transformer._active_adapters = [adapter_name]
+            except Exception as e:
+                logger.warning(
+                    "Could not force transformer._active_adapters=%s (%s).",
+                    adapter_name,
+                    e,
+                )
+
+        if hasattr(transformer, "active_adapter"):
+            try:
+                transformer.active_adapter = adapter_name
+            except Exception as e:
+                logger.warning(
+                    "Could not force transformer.active_adapter=%s (%s).",
+                    adapter_name,
+                    e,
+                )
+
+        # Some PEFT/diffusers versions expose active state through _active_adapters.
+        if hasattr(transformer, "_active_adapters"):
+            try:
+                transformer._active_adapters = [adapter_name]
+            except Exception as e:
+                logger.warning(
+                    "Could not force transformer._active_adapters=%s (%s).",
+                    adapter_name,
+                    e,
+                )
+
+        if hasattr(transformer, "active_adapter"):
+            try:
+                transformer.active_adapter = adapter_name
+            except Exception as e:
+                logger.warning(
+                    "Could not force transformer.active_adapter=%s (%s).",
+                    adapter_name,
+                    e,
+                )
+                    
+
+        # Force nested LoRA/PEFT modules too. This matters because some forward paths
+        # may consult module-level active adapter state instead of only the top-level attr.
+        for module in transformer.modules():
+            set_adapter = getattr(module, "set_adapter", None)
+            if callable(set_adapter):
+                try:
+                    set_adapter(adapter_name)
+                except Exception as e:
+                    logger.debug(
+                        "Ignoring recursive set_adapter failure on %s: %s",
+                        type(module).__name__,
+                        e,
+                    )
+
+            for attr in ("_active_adapter", "active_adapter"):
+                if hasattr(module, attr):
+                    try:
+                        setattr(module, attr, adapter_name)
+                    except Exception as e:
+                        logger.debug(
+                            "Could not force %s.%s=%s (%s)",
+                            type(module).__name__,
+                            attr,
+                            adapter_name,
+                            e,
+                        )
+
+            if hasattr(module, "_active_adapters"):
+                try:
+                    module._active_adapters = [adapter_name]
+                except Exception as e:
+                    logger.debug(
+                        "Could not force %s._active_adapters=%s (%s)",
+                        type(module).__name__,
+                        adapter_name,
+                        e,
+                    )
+
+            # PEFT versions can expose _active_adapter as None even after set_adapter() succeeds.
+            # The workflow-level source of truth is now lotus_model.active_adapter.
+            # Log once after all modules have been updated.
+            actual_active = getattr(transformer, "_active_adapter", None)
+            if isinstance(actual_active, (list, tuple)):
+                actual_active = list(actual_active)
+
+            if actual_active != adapter_name:
+                logger.warning(
+                    "PEFT did not expose active adapter as '%s' after forcing; continuing with forced state. "
+                    "Actual PEFT value is %s.",
+                    adapter_name,
+                    actual_active,
+                )
+
+
     def switch(self, lotus_model, adapter_name: str):
         """Switch the active PEFT adapter on the transformer.
 
@@ -94,8 +228,12 @@ class Lotus2AdapterSwitcher:
             )
 
         # 3. Switch adapter (stateful, in-place — mirrors pipeline.py line ~137/~154)
-        logger.info("Switching active adapter to: %s", adapter_name)
-        lotus_model.transformer.set_adapter(adapter_name)
+        current_active = getattr(lotus_model.transformer, "_active_adapter", None)
+        logger.info(
+            f"Lotus2: Adapter {'loaded' if current_active != adapter_name else 'reusing cache'} - mode={adapter_name}"
+        )
+
+        self._force_active_adapter(lotus_model.transformer, adapter_name)
 
         # 4. Track current adapter on the state object (dynamic attribute is fine for dataclass instances)
         lotus_model.active_adapter = adapter_name

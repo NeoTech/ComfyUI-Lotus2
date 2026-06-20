@@ -124,11 +124,6 @@ class Lotus2PackedSampler:
                 "Ensure Lotus2PeftLoader (or equivalent) populated the model state correctly."
             )
 
-        logger.info(
-            "Lotus2PackedSampler — batch=%d, packed_seq_len=%d, num_steps=%d, guidance=%.1f",
-            batch_size, x.shape[1], num_steps, guidance_scale,
-        )
-
         # ---- B: Build guidance tensor ----
         if getattr(transformer.config, 'guidance_embeds', False):
             guidance = torch.full([1], guidance_scale, device=device, dtype=torch.float32)
@@ -148,8 +143,6 @@ class Lotus2PackedSampler:
                 batch_size, text_len, hidden_dim,
                 device=device, dtype=x.dtype
             )
-            logger.info("No prompt_embeds provided — using zero tensor [%d, %d, %d]",
-                        batch_size, text_len, hidden_dim)
 
         if pooled_embeds is not None and isinstance(pooled_embeds, list) and len(pooled_embeds) > 0:
             proj = (
@@ -164,8 +157,6 @@ class Lotus2PackedSampler:
         else:
             hidden_dim_p = getattr(transformer.config, 'pooled_projection_dim', 768)
             proj = torch.zeros(batch_size, hidden_dim_p, device=device, dtype=x.dtype)
-            logger.info("No pooled_embeds provided — using zero tensor [%d, %d]",
-                        batch_size, hidden_dim_p)
 
         enc_hidden_states = enc_hidden_states.to(device=device, dtype=x.dtype)
         proj = proj.to(device=device, dtype=x.dtype)
@@ -211,11 +202,13 @@ class Lotus2PackedSampler:
         )
 
         # ---- G: Denoising loop (mirrors pipeline.py ~lines 152-178) ----
-        latents = x
+        logger.info("Lotus2: Sampler reusing cache")
+        latents = x.clone().detach()
         num_warmup_steps = max(len(timesteps) - len(timesteps) * scheduler.order, 0) if hasattr(scheduler, 'order') else 0
 
         with torch.no_grad():
             for i, t in enumerate(timesteps):
+                logger.info("Lotus2: Sampler loading denoising loop")
                 timestep = t.expand(latents.shape[0]).to(latents.dtype)
 
                 noise_pred = transformer(
@@ -231,7 +224,8 @@ class Lotus2PackedSampler:
                 )[0]
 
                 latents_dtype = latents.dtype
-                latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+                scheduler_input_latents = latents.clone().detach()
+                latents = scheduler.step(noise_pred, t, scheduler_input_latents, return_dict=False)[0]
 
                 if latents.dtype != latents_dtype:
                     try:
@@ -243,12 +237,7 @@ class Lotus2PackedSampler:
                 logger.info("Step %d/%d, t=%.4f", i + 1, len(timesteps), float(t))
 
         # ---- H: Return denoised packed latents as LATENT dict ----
-        logger.info(
-            "Denoising complete — output shape %s",
-            list(latents.shape)
-        )
-
-        result_dict = {"samples": latents}
+        result_dict = {"samples": latents.clone().detach()}
         for key in ("_height", "_width"):
             if key in packed_latents:
                 result_dict[key] = packed_latents[key]

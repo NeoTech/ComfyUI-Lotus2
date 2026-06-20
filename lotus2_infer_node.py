@@ -1,5 +1,3 @@
-"""ComfyUI custom node wrapping the Lotus-2 inference pipeline."""
-
 import os
 import sys
 import uuid
@@ -10,15 +8,30 @@ import torch
 from PIL import Image
 import numpy as np
 
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - LotusInferNode - %(message)s",
-    datefmt="%m/%d/%Y %H:%M:%S",
-    level=logging.INFO,
-)
-logger = logging.getLogger("LotusInferNode")
-
+logger = logging.getLogger(__name__)
 
 _PIPELINES: dict = {}
+
+
+def _clear_pipeline_cache(pretrained_model_name_or_path=None, task_name=None):
+    """Remove cached monolithic pipelines without touching unrelated entries."""
+    keys_to_remove = []
+
+    for cache_key in list(_PIPELINES.keys()):
+        if pretrained_model_name_or_path is not None and task_name is not None:
+            if cache_key != (pretrained_model_name_or_path, task_name):
+                continue
+        keys_to_remove.append(cache_key)
+
+    for cache_key in keys_to_remove:
+        pipeline, device = _PIPELINES.pop(cache_key)
+        try:
+            del pipeline
+        except Exception as e:
+            logger.warning("Error deleting cached pipeline [%s]: %s", cache_key, e)
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def _ensure_lotus_path() -> None:
@@ -249,3 +262,36 @@ class Lotus2Infer:
                     logger.warning(f"Failed to cleanup {tmp_file}: {e}")
 
         return (result_vis, depth_tensor)
+
+
+class Lotus2PipelineCleanup:
+    """Explicitly release cached monolithic Lotus-2 pipelines from VRAM."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "pretrained_model_name_or_path": (
+                    ["ALL", "black-forest-labs/FLUX.1-dev"],
+                    {"default": "black-forest-labs/FLUX.1-dev"},
+                ),
+                "task_name": (["depth", "normal"],),
+            },
+            "optional": {
+                "trigger": (
+                    "*",
+                    {"tooltip": "Wire from image output to run cleanup AFTER inference."},
+                ),
+            },
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "cleanup"
+    CATEGORY = "image/depth_normal_estimation"
+    OUTPUT_NODE = True
+
+    def cleanup(self, pretrained_model_name_or_path: str, task_name: str, trigger=None):
+        """Remove cached pipeline state for the selected model/task."""
+        path = None if pretrained_model_name_or_path == "ALL" else pretrained_model_name_or_path
+        _clear_pipeline_cache(pretrained_model_name_or_path=path, task_name=task_name)
+        return ()

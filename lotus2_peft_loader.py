@@ -19,6 +19,35 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+class _NoOpProgressBar:
+    """Fallback progress bar used when ComfyUI is not available."""
+
+    def __init__(self, total: int):
+        self.total = total
+        self.value = 0
+
+    def update(self, amount: int = 1) -> None:
+        self.value += amount
+
+
+def _create_model_loading_progress_bar(total: int):
+    """Create a ComfyUI progress bar when running inside ComfyUI."""
+    try:
+        from comfy.utils import ProgressBar as ComfyProgressBar
+        return ComfyProgressBar(total)
+    except Exception:
+        return _NoOpProgressBar(total)
+
+
+def _update_model_loading_progress(progress_bar, label: str) -> None:
+    """Log and advance the model-loading progress bar."""
+    logger.info(label)
+    try:
+        progress_bar.update(1)
+    except Exception as e:
+        logger.debug("Failed to update ComfyUI progress bar: %s", e)
+
+
 # ============================================================
 # Lotus2ModelState — shared data object across the node graph
 # ============================================================
@@ -61,6 +90,8 @@ def _get_or_create_model_state(
     Returns:
         Fully-populated Lotus2ModelState ready for inference.
     """
+    progress_bar = _create_model_loading_progress_bar(total=3)
+
     # --- Device & dtype --------------------------------------------------------
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -74,41 +105,39 @@ def _get_or_create_model_state(
     weight_dtype = torch.bfloat16
 
     # --- Scheduler -------------------------------------------------------------
+    _update_model_loading_progress(progress_bar, "Loading scheduler")
     try:
         from diffusers import FlowMatchEulerDiscreteScheduler
-        logger.info(
-            "Loading scheduler from %s",
-            pretrained_model_name_or_path,
-        )
+
         noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
             pretrained_model_name_or_path,
             subfolder="scheduler",
             num_train_timesteps=10,
         )
+        _update_model_loading_progress(progress_bar, "Loaded scheduler; loading transformer")
     except Exception as e:
         raise RuntimeError(f"Failed to load scheduler from '{pretrained_model_name_or_path}': {e}") from e
 
     # --- Base transformer ------------------------------------------------------
+    _update_model_loading_progress(progress_bar, "Loaded scheduler; loading transformer")
     try:
         from diffusers import FluxTransformer2DModel
-        logger.info(
-            "Loading base transformer from %s",
-            pretrained_model_name_or_path,
-        )
+
         transformer = FluxTransformer2DModel.from_pretrained(
             pretrained_model_name_or_path,
             subfolder="transformer",
         )
         transformer.requires_grad_(False)
         transformer.to(device=device, dtype=weight_dtype)
+        _update_model_loading_progress(progress_bar, "Loaded transformer; loading PEFT/LCM adapters")
     except Exception as e:
         raise RuntimeError(f"Failed to load transformer from '{pretrained_model_name_or_path}': {e}") from e
 
     # --- PEFT adapters + LCM ---------------------------------------------------
+    _update_model_loading_progress(progress_bar, "Loaded transformer; loading PEFT/LCM adapters")
     try:
         from .lotus2_utils import load_lora_and_lcm_weights_for_task
 
-        logger.info("Loading PEFT adapters and LCM for task='%s'", task_name)
         transformer, lcm_module = load_lora_and_lcm_weights_for_task(
             transformer,
             task_name=task_name,
@@ -116,13 +145,13 @@ def _get_or_create_model_state(
             lcm_model_path=None,                  # auto-download from HF
             detail_sharpener_model_path=None,     # auto-download from HF
         )
+        _update_model_loading_progress(progress_bar, "Loaded PEFT/LCM adapters")
     except Exception as e:
         raise RuntimeError(
             f"Failed to load PEFT/LCM adapters for task='{task_name}': {e}"
         ) from e
 
     # --- Assemble state --------------------------------------------------------
-    logger.info("Model state assembled — transformer on %s", device)
     state = Lotus2ModelState()
     state.transformer = transformer.to(device)
     state.lcm_module = lcm_module
@@ -177,80 +206,89 @@ class Lotus2PeftLoader:
         cache_key = (pretrained_model_name_or_path, task_name)
 
         if cache_key in self._CACHE:
-            logger.info("Reusing cached model state [%s].", cache_key)
+            logger.info("Lotus2: Peft reusing cache")
             self._CACHE[cache_key]._ref_count += 1
             return (self._CACHE[cache_key],)
 
+        logger.info("Lotus2: Peft Loading models")
         state = _get_or_create_model_state(pretrained_model_name_or_path, task_name)
         state._ref_count = 1
         self._CACHE[cache_key] = state
-        logger.info("New model state cached [%s].", cache_key)
         return (state,)
 
     @classmethod
     def clear_cache(cls):
         """Clear all cached Lotus-2 model states and release CUDA activation cache."""
-        _cleanup_model_state(pretrained_model_name_or_path="ALL")
+        _cleanup_model_state(pretrained_model_name_or_path=None, task_name=None)
+
+
+def _clear_model_state(cache_key: tuple[str, str]) -> bool:
+    """Remove one exact cached model state without touching refcounts.
+
+    This is used for explicit reset/cleanup paths where stale PEFT adapter state
+    must be discarded immediately instead of waiting for a refcount to reach zero.
+    """
+    state = Lotus2PeftLoader._CACHE.pop(cache_key, None)
+    if state is None:
+        return False
+
+    transformer = getattr(state, "transformer", None)
+    lcm_module = getattr(state, "lcm_module", None)
+    scheduler = getattr(state, "scheduler", None)
+
+    if transformer is not None:
+        try:
+            transformer.to(device="cpu")
+        except Exception as e:
+            logger.warning("Error moving transformer to CPU during cleanup: %s", e)
+
+    if lcm_module is not None:
+        try:
+            lcm_module.to(device="cpu")
+        except Exception as e:
+            logger.warning("Error moving LCM to CPU during cleanup: %s", e)
+
+    if scheduler is not None:
+        try:
+            scheduler.to(device="cpu")
+        except Exception as e:
+            logger.warning("Error moving scheduler to CPU during cleanup: %s", e)
+
+    for attr in ("transformer", "lcm_module", "scheduler"):
+        if hasattr(state, attr):
+            setattr(state, attr, None)
+
+    return True
 
 
 def _cleanup_model_state(
     pretrained_model_name_or_path: str | None = None,
     task_name: str | None = None,
 ):
-    """Decrement ref count for a cached model; unload if zero.
-
-    Each call decrements the matched entry's _ref_count by 1. When it reaches 
-    0 the transformer + LCM are moved to CPU and removed from cache.
+    """Remove cached model state(s) and release CUDA activation cache.
 
     Args:
-        pretrained_model_name_or_path: If None, sweep ALL entries (decrement every ref).
-                                        Otherwise match specific path+task combo.
-        task_name: Task name ("depth"/"normal"). Ignored when pretrained is None.
+        pretrained_model_name_or_path: Exact model path to remove, or ``None`` for all entries.
+        task_name: Task name ("depth"/"normal"). Ignored when pretrained is ``None``.
     """
-    keys_to_remove = []
+    if pretrained_model_name_or_path is None and task_name is None:
+        for cache_key in list(Lotus2PeftLoader._CACHE.keys()):
+            _clear_model_state(cache_key)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return
 
-    for cache_key, state in Lotus2PeftLoader._CACHE.items():
-        # If filtering by key, skip non-matching entries
-        if pretrained_model_name_or_path is not None and task_name is not None:
-            if cache_key != (pretrained_model_name_or_path, task_name):
-                continue
+    if pretrained_model_name_or_path is None or task_name is None:
+        logger.warning(
+            "Cleanup requires both model path and task name, got path=%s task=%s.",
+            pretrained_model_name_or_path,
+            task_name,
+        )
+        return
 
-        # Decrement ref count — each cleanup call reduces by 1
-        state._ref_count -= 1
-        logger.info("Ref count for [%s] decremented to %d", cache_key, state._ref_count)
-
-        if state._ref_count <= 0:
-            keys_to_remove.append(cache_key)
-            logger.info("Unloading model state [%s] — ref count reached 0.", cache_key)
-
-            # Move to CPU first, then delete references. Use getattr so cleanup can run on partially-cleared states.
-            transformer = getattr(state, "transformer", None)
-            if transformer is not None:
-                try:
-                    transformer.to(device="cpu")
-                except Exception as e:
-                    logger.warning("Error moving transformer to CPU during cleanup: %s", e)
-                delattr(state, "transformer")
-
-            lcm_module = getattr(state, "lcm_module", None)
-            if lcm_module is not None:
-                try:
-                    lcm_module.to(device="cpu")
-                except Exception as e:
-                    logger.warning("Error moving LCM to CPU during cleanup: %s", e)
-                delattr(state, "lcm_module")
-
-            scheduler = getattr(state, "scheduler", None)
-            if scheduler is not None:
-                try:
-                    scheduler.to(device="cpu")
-                except Exception as e:
-                    logger.warning("Error moving scheduler to CPU during cleanup: %s", e)
-                delattr(state, "scheduler")
-
-    # Remove all zero-ref entries from cache AFTER processing (avoid dict mutation while iterating)
-    for key in keys_to_remove:
-        Lotus2PeftLoader._CACHE.pop(key, None)
+    cache_key = (pretrained_model_name_or_path, task_name)
+    if not _clear_model_state(cache_key):
+        logger.warning("No matching cached model state for cleanup [%s].", cache_key)
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()

@@ -108,8 +108,6 @@ def get_model_path(model_path, repo_id, filename):
                     break
             else:
                 raise FileNotFoundError(f"Could not find {filename} in the downloaded repository")
-
-        logging.info(f"Successfully downloaded {filename} model to: {full_path}")
         return full_path
 
     except Exception as e:
@@ -306,12 +304,12 @@ def load_lora_and_lcm_weights(transformer, core_predictor_model_path, lcm_model_
         # check only for unexpected keys
         unexpected_keys = getattr(incompatible_keys, "unexpected_keys", None)
         if unexpected_keys:
-            logging.warning(
+            logger.warning(
                 f"Loading adapter weights from state_dict led to unexpected keys not found in the model: "
                 f" {unexpected_keys}. "
             )
 
-    for name, param in transformer.named_parameters():
+    for name, paer in transformer.named_parameters():
         if "core_predictor" in name:
             param.requires_grad = False
     # transformer.to(device=device, dtype=weight_dtype)

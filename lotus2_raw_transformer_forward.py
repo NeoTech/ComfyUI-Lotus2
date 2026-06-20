@@ -115,20 +115,20 @@ class Lotus2RawTransformerForward:
                 "lotus_model has no 'transformer' attribute. "
                 "Ensure Lotus2PeftLoader (or equivalent) populated the model state correctly."
             )
+            
 
         weight_dtype = transformer.dtype
 
         # ---- c) Log active adapter and key shapes ----
-        active_adapter = None
-        if hasattr(transformer, 'active_adapters'):
-            active_adapter = transformer.active_adapters()
-        elif hasattr(transformer, 'peft_config'):
-            active_adapter = list(getattr(transformer, 'peft_config', {}).keys()) or None
+        workflow_active_adapter = getattr(lotus_model, "active_adapter", None)
+        peft_active_adapter = getattr(transformer, "_active_adapter", None)
+
+        actual_active_adapter = workflow_active_adapter or peft_active_adapter
+        available_adapters = list(getattr(transformer, "peft_config", {}).keys()) or []
 
         logger.info(
-            "Lotus2RawTransformerForward — batch=%d, packed_seq_len=%d, timestep=%.4f, guidance=%.1f%s",
-            batch_size, x.shape[1], timestep, guidance_scale,
-            f", active_adapter={active_adapter}" if active_adapter else ""
+            f"Lotus2: Transformer {'reusing cache' if actual_active_adapter else 'loading'} - "
+            f"mode={actual_active_adapter}, peft_mode={peft_active_adapter}, available={available_adapters}"
         )
 
         # ---- d) Build guidance tensor (FLUX uses config.guidance_embeds check) ----
@@ -150,8 +150,6 @@ class Lotus2RawTransformerForward:
                 batch_size, text_len, hidden_dim,
                 device=device, dtype=weight_dtype
             )
-            logger.info("No prompt_embeds provided — using zero tensor [%d, %d, %d]",
-                batch_size, text_len, hidden_dim)
 
         if pooled_embeds is not None and isinstance(pooled_embeds, list) and len(pooled_embeds) > 0:
             proj = (
@@ -166,8 +164,6 @@ class Lotus2RawTransformerForward:
         else:
             hidden_dim_p = getattr(transformer.config, 'pooled_projection_dim', 768)
             proj = torch.zeros(batch_size, hidden_dim_p, device=device, dtype=weight_dtype)
-            logger.info("No pooled_embeds provided — using zero tensor [%d, %d]",
-                        batch_size, hidden_dim_p)
 
         enc_hidden_states = enc_hidden_states.to(device=device, dtype=weight_dtype)
         proj = proj.to(device=device, dtype=weight_dtype)
@@ -195,12 +191,8 @@ class Lotus2RawTransformerForward:
             )
 
         # ---- h) Call transformer (mirrors pipeline.py ~line 140 exactly) ----
+        logger.info("Lotus2: Transformer loading active adapter")
         timestep_tensor = torch.full((batch_size,), timestep, dtype=weight_dtype, device=device)
-
-        logger.info(
-            "Calling transformer — hidden_states=%s, pooled_projections=%s, encoder_hidden_states=%s",
-            list(x.shape), list(proj.shape), list(enc_hidden_states.shape)
-        )
 
         output_tensor = transformer(
             hidden_states=x.to(device=device, dtype=weight_dtype),
@@ -215,10 +207,7 @@ class Lotus2RawTransformerForward:
         )[0]
 
         # ---- i) Return as LATENT dict (standard ComfyUI format: {"samples": tensor}) ----
-        logger.info(
-            "Transformer output shape %s — returning packed latents", list(output_tensor.shape)
-        )
-        result_dict = {"samples": output_tensor}
+        result_dict = {"samples": output_tensor.clone().detach()}
         for key in ("_height", "_width"):
             if key in packed_latents:
                 result_dict[key] = packed_latents[key]

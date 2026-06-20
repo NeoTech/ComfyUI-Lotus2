@@ -52,6 +52,7 @@ class Lotus2LcmInference:
                 "Ensure you used Lotus2PeftLoader (which loads LCM during init)."
             )
 
+        logger.info("Lotus2: LCM reusing cache")
         lcm_module = lotus_model.lcm_module
 
         # --- 2. Extract samples tensor -----------------------------------------
@@ -78,12 +79,11 @@ class Lotus2LcmInference:
         # Ensure LCM module parameters are on the same device (handles override path).
         current_lcm_device = lcm_module.lcm[0].weight.device
         if str(current_lcm_device) != str(device):
-            logger.info("Moving LCM module to %s", device)
             lcm_module.to(device=device)
 
+        logger.info("Lotus2: LCM loading module")
         # --- 4. LCM forward pass (handles dtype alignment internally) ----------
-        logger.info("LCM inference on shape %s, device=%s", x.shape, device)
-        refined = lcm_module(x)  # residual: x + lcm_conv_block(x)
+        refined = lcm_module(x.clone().detach())  # residual: x + lcm_conv_block(x)
 
         # --- 5. Return as ComfyUI LATENT dict -----------------------------------
-        return ({"samples": refined},)
+        return ({"samples": refined.clone().detach()},)

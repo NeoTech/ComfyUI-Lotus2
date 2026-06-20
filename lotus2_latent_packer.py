@@ -75,14 +75,17 @@ class Lotus2LatentPacker:
         x = latents["samples"]
 
         if mode == "pack":
+            logger.info("Lotus2: Latent Packer loading pack operation")
             return self._pack(x)
         elif mode == "unpack":
+            logger.info("Lotus2: Latent Packer reusing cache")
             return self._unpack(latents, height, width)
         else:
             raise ValueError(f"Unknown mode '{mode}'. Expected one of {self.MODES}")
 
     def _pack(self, x: torch.Tensor) -> tuple:
         """Pack spatial [B,C,H,W] latents into sequence format and produce image IDs."""
+
         if x.dim() != 4:
             raise ValueError(
                 f"Pack mode expects 4D tensor [B,C,H,W], got {x.dim()}D with shape {tuple(x.shape)}. "
@@ -90,12 +93,9 @@ class Lotus2LatentPacker:
             )
 
         B, C, H, W = x.shape
-        logger.info("Packing latents: %s -> packed sequence", tuple(x.shape))
 
+        logger.info("Lotus2: Latent Packer loading latent tensors")
         packed_tensor = pack_latents(x)
-        logger.info(
-            "Packed result shape: %s (device=%s)", tuple(packed_tensor.shape), packed_tensor.device
-        )
 
         # Store H/W metadata for unpack mode
         result_dict = {
@@ -112,12 +112,12 @@ class Lotus2LatentPacker:
             device=x.device,
             dtype=x.dtype,
         )
-        logger.info("Image IDs shape: %s", tuple(img_ids.shape))
 
         return (result_dict, img_ids)
 
     def _unpack(self, latents: dict, height_param: int, width_param: int) -> tuple:
         """Unpack packed sequence latents back to spatial [B,C,H,W]."""
+
         x = latents["samples"]
 
         # Resolve H/W from stored metadata or manual params
@@ -132,11 +132,7 @@ class Lotus2LatentPacker:
                 f"Got height={height_param}, width={width_param}, stored keys: {[k for k in latents if k.startswith('_')]}"
             )
 
-        logger.info("Unpacking packed latents %s with H=%d, W=%d", tuple(x.shape), H, W)
-
+        logger.info("Lotus2: Latent Packer loading latent tensors")
         unpacked = unpack_latents(x, height=H, width=W, vae_scale_factor=VAE_SCALE_FACTOR)
-        logger.info(
-            "Unpacked result shape: %s (device=%s)", tuple(unpacked.shape), unpacked.device
-        )
 
         return ({"samples": unpacked}, {})

@@ -103,8 +103,6 @@ def get_model_path(model_path, repo_id: str, filename: str):
             "Install via: pip install huggingface_hub"
         )
 
-    logger.info("Downloading %s from %s", filename, repo_id)
-
     try:
         cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
         os.makedirs(cache_dir, exist_ok=True)
@@ -128,7 +126,6 @@ def get_model_path(model_path, repo_id: str, filename: str):
                     f"'{filename}' not found after downloading '{repo_id}'"
                 )
 
-        logger.info("Model saved to %s", full_path)
         return full_path
 
     except Exception as e:
@@ -150,7 +147,7 @@ def _load_model_weights(path: str | Path):
 
     try:
         sd = sf_torch.load_file(str(path))
-        logger.info("Loaded %s via [safetensors] (%d keys)", path, len(sd))
+        # logger.info("Loaded %s via [safetensors] (%d keys)", path, len(sd))
         return sd
     except Exception as e_sf:
         logger.warning(
@@ -163,7 +160,7 @@ def _load_model_weights(path: str | Path):
     try:
         import torch as _torch
         sd = _torch.load(str(path), map_location="cpu", weights_only=True)
-        logger.info("Loaded %s via [torch.load] (%d keys)", path, len(sd))
+        # logger.info("Loaded %s via [torch.load] (%d keys)", path, len(sd))
         return sd
     except Exception as e_torch:
         raise RuntimeError(
@@ -369,8 +366,6 @@ def load_lora_and_lcm_weights_for_task(
         if "core_predictor" in name:
             param.requires_grad = False
 
-    logger.info("Loaded LoRA weights for [core predictor] (rank=%d).", lora_rank)
-
     # ---- 2. Local Continuity Module (LCM) -----------------------------------
     num_lcm_channels = transformer.config.in_channels // 4
     local_continuity_module = LocalContinuityModule(num_lcm_channels)
@@ -378,7 +373,6 @@ def load_lora_and_lcm_weights_for_task(
     local_continuity_module.load_state_dict(lcm_state_dict)
     local_continuity_module.requires_grad_(False)
     local_continuity_module.to(device=device, dtype=weight_dtype)
-    logger.info("Loaded weights for [local continuity module (LCM)].")
 
     # ---- 3. Detail sharpener LoRA -------------------------------------------
     sharpener_lora_config = LoraConfig(
@@ -405,8 +399,6 @@ def load_lora_and_lcm_weights_for_task(
     for name, param in transformer.named_parameters():
         if "detail_sharpener" in name:
             param.requires_grad = False
-
-    logger.info("Loaded LoRA weights for [detail sharpener] (rank=%d).", lora_rank)
 
     return transformer, local_continuity_module
 
