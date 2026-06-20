@@ -29,7 +29,6 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Lotus-2 Infer": "Lotus2: Infer",
     "Lotus-2 Pipeline Cleanup": "Lotus2: Release Wrapper Cache",
     "Load-Lotus2-PEFT": "Lotus2: Load PEFT Adapters",
     "Lotus-2 LCM Inference": "Lotus2: LCM Inference",
@@ -38,7 +37,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Lotus-2 Raw Transformer Forward": "Lotus2: Raw Transformer Forward",
     "Lotus-2 Packed Sampler": "Lotus2: Packed Latent Denoiser",
     "Lotus-2 Flux VAE Encode": "Lotus2: Flux VAE Encode Normalize",
-    "Lotus-2 Flux VAE Decode": "Lotus2: Flux VAE Decode"
+    "Lotus-2 Flux VAE Decode": "Lotus2: Flux V  AE Decode",
+    "Lotus-2 Infer": "Lotus2: Infer (Deprecated)",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]
