@@ -59,7 +59,15 @@ class Lotus2FluxVaeDecode:
         scaling_factor = self._get_vae_scaling_factor(vae)
         shift_factor = self._get_vae_shift_factor(vae)
 
-        decoded_latents = (latents / scaling_factor) + shift_factor
+        decoded_latents = latents / float(scaling_factor) + float(shift_factor)
+
+        logger.info(
+            "Lotus2: VAE Decode samples dtype=%s device=%s shape=%s",
+            latents.dtype,
+            latents.device,
+            tuple(latents.shape),
+        )
+        
         logger.info("Lotus2: VAE Decode loading model")
         decoded_latents = decoded_latents.clone().detach()
         decoded_latents = decoded_latents.to(device=latents.device, dtype=latents.dtype)

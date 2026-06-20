@@ -29,6 +29,8 @@ except ImportError:
     # Allow instantiation without full ComfyUI env (e.g. unit tests).
     Lotus2ModelState = None  # type: ignore
 
+from .lotus2_adapter_switcher import Lotus2AdapterSwitcher
+
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +118,10 @@ class Lotus2PackedSampler:
                 "lotus_model has no 'transformer' attribute. "
                 "Ensure Lotus2PeftLoader (or equivalent) populated the model state correctly."
             )
+
+        # Force this stage to use detail_sharpener so stale core_predictor state cannot leak in.
+        Lotus2AdapterSwitcher._force_active_adapter(transformer, "detail_sharpener")
+        lotus_model.active_adapter = "detail_sharpener"
 
         scheduler = getattr(lotus_model, 'scheduler', None)
         if scheduler is None:

@@ -28,6 +28,8 @@ except ImportError:
     # Allow instantiation without full ComfyUI env (e.g. unit tests).
     Lotus2ModelState = None  # type: ignore
 
+from .lotus2_adapter_switcher import Lotus2AdapterSwitcher
+
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +117,10 @@ class Lotus2RawTransformerForward:
                 "lotus_model has no 'transformer' attribute. "
                 "Ensure Lotus2PeftLoader (or equivalent) populated the model state correctly."
             )
-            
+
+        # Force this stage to use core_predictor so stale detail_sharpener state cannot leak in.
+        Lotus2AdapterSwitcher._force_active_adapter(transformer, "core_predictor")
+        lotus_model.active_adapter = "core_predictor"
 
         weight_dtype = transformer.dtype
 

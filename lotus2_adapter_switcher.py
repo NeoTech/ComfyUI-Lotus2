@@ -104,48 +104,18 @@ class Lotus2AdapterSwitcher:
                     e,
                 )
 
-        # Also clear any stale active state that PEFT may have restored.
-        if hasattr(transformer, "_active_adapters"):
-            try:
-                transformer._active_adapters = [adapter_name]
-            except Exception as e:
-                logger.warning(
-                    "Could not force transformer._active_adapters=%s (%s).",
-                    adapter_name,
-                    e,
-                )
-
-        if hasattr(transformer, "active_adapter"):
-            try:
-                transformer.active_adapter = adapter_name
-            except Exception as e:
-                logger.warning(
-                    "Could not force transformer.active_adapter=%s (%s).",
-                    adapter_name,
-                    e,
-                )
-
-        # Some PEFT/diffusers versions expose active state through _active_adapters.
-        if hasattr(transformer, "_active_adapters"):
-            try:
-                transformer._active_adapters = [adapter_name]
-            except Exception as e:
-                logger.warning(
-                    "Could not force transformer._active_adapters=%s (%s).",
-                    adapter_name,
-                    e,
-                )
-
-        if hasattr(transformer, "active_adapter"):
-            try:
-                transformer.active_adapter = adapter_name
-            except Exception as e:
-                logger.warning(
-                    "Could not force transformer.active_adapter=%s (%s).",
-                    adapter_name,
-                    e,
-                )
-                    
+        # Some PEFT/diffusers versions expose active state on top-level attrs.
+        for attr, value in (("_active_adapters", [adapter_name]), ("active_adapter", adapter_name)):
+            if hasattr(transformer, attr):
+                try:
+                    setattr(transformer, attr, value)
+                except Exception as e:
+                    logger.warning(
+                        "Could not force transformer.%s=%s (%s).",
+                        attr,
+                        value,
+                        e,
+                    )
 
         # Force nested LoRA/PEFT modules too. This matters because some forward paths
         # may consult module-level active adapter state instead of only the top-level attr.
@@ -185,20 +155,18 @@ class Lotus2AdapterSwitcher:
                         e,
                     )
 
-            # PEFT versions can expose _active_adapter as None even after set_adapter() succeeds.
-            # The workflow-level source of truth is now lotus_model.active_adapter.
-            # Log once after all modules have been updated.
-            actual_active = getattr(transformer, "_active_adapter", None)
-            if isinstance(actual_active, (list, tuple)):
-                actual_active = list(actual_active)
+        # PEFT versions can expose _active_adapter as None even after set_adapter() succeeds.
+        # The workflow-level source of truth is now lotus_model.active_adapter.
+        actual_active = getattr(transformer, "_active_adapter", None)
+        if isinstance(actual_active, (list, tuple)):
+            actual_active = list(actual_active)
 
-            if actual_active != adapter_name:
-                logger.warning(
-                    "PEFT did not expose active adapter as '%s' after forcing; continuing with forced state. "
-                    "Actual PEFT value is %s.",
-                    adapter_name,
-                    actual_active,
-                )
+        logger.debug(
+            "PEFT active state after forcing %s is %s; workflow forced %s.",
+            adapter_name,
+            actual_active,
+            adapter_name,
+        )
 
 
     def switch(self, lotus_model, adapter_name: str):
